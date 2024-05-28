@@ -1,0 +1,17 @@
+*.png
+*.pyc
+*.tsv
+*.csv
+*.svn-base
+*.edges
+*.json
+*.RData
+*.Rhistory
+*.npy
+*.npz
+*.jpg
+*.graphml
+*.gz
+
+
+
