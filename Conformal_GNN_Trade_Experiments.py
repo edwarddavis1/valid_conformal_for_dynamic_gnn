@@ -1,36 +1,22 @@
 # %%
 import copy
 from itertools import product
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pickle
-from scipy.linalg import block_diag
 from tqdm import tqdm
-
 import torch
 from torch.functional import F
-
 import torch_geometric
-from torch_geometric.data import Data, Dataset
+from torch_geometric.data import Dataset
 from torch_geometric.nn import GATConv, GCNConv
-
 from scipy import sparse
-
-# Specific to trade
-from decoder import NodePredictor
-from tgb.nodeproppred.dataset_pyg import PyGNodePropPredDataset
-from tgb.nodeproppred.evaluate import Evaluator
-from tgb.utils.utils import set_random_seed
-
 from torch_geometric.utils import to_scipy_sparse_matrix
 
 # %% [markdown]
 # ## Experiment parameters
 
 # %%
-# print("\n\n\nWARNING: NOT SAVING\n\n\n")
-
 dataset_name = "Trade"
 
 
@@ -39,18 +25,6 @@ props = np.array([0.2, 0.1, 0.35, 0.35])
 
 # Target 1-coverage for conformal prediction
 alpha = 0.1
-
-# # # Number of experiments
-# print("REduced params!\n\n")
-# num_train_trans = 1
-# num_permute_trans = 1
-# num_train_semi_ind = 1
-
-# # GNN model parameters
-# print("REduced GNN params!\n\n")
-# num_epochs = 1
-# num_channels_GCN = 32
-# num_channels_GAT = 32
 
 # Number of experiments
 num_train_trans = 10

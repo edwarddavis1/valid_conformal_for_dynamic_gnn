@@ -1,27 +1,39 @@
-import matplotlib.pyplot as plt
 import numpy as np
-import networkx as nx
-import pandas as pd
-import plotly.express as px
 from scipy.linalg import block_diag
 from scipy import sparse
-from sklearn.decomposition import PCA
 from tqdm import tqdm
-
 import torch
 from torch.functional import F
-
 import torch_geometric
-from torch_geometric.data import Data
 from torch_geometric.data import Dataset
-from torch_geometric.loader import DataLoader
 from torch_geometric.nn import GCNConv
 from torch_geometric.nn import GATConv
-from torch_geometric.nn import SAGEConv
-from torch_geometric.utils import to_networkx
-from torch_geometric.utils import to_scipy_sparse_matrix
 
-from embedding_functions import general_unfolded_matrix
+
+def general_unfolded_matrix(As, sparse_matrix=False):
+    """Forms the general unfolded matrix from an adjacency series"""
+    T = len(As)
+    n = As[0].shape[0]
+
+    # Construct the rectangular unfolded adjacency
+    if sparse_matrix:
+        A = As[0]
+        for t in range(1, T):
+            A = sparse.hstack((A, As[t]))
+
+        # Construct the dilated unfolded adjacency matrix
+        DA = sparse.bmat([[None, A], [A.T, None]])
+        DA = sparse.csr_matrix(DA)
+    else:
+        A = As[0]
+        for t in range(1, T):
+            A = np.block([A, As[t]])
+
+        DA = np.zeros((n + n * T, n + n * T))
+        DA[0:n, n:] = A
+        DA[n:, 0:n] = A.T
+
+    return DA
 
 
 class Dynamic_Network(Dataset):
@@ -113,7 +125,6 @@ class Dynamic_Network(Dataset):
         data.num_nodes = self.n
 
         return data
-
 
 
 class Block_Diagonal_Network(Dataset):
@@ -516,7 +527,6 @@ def UGCN(
         if epoch_save_checkpoint == 0:
             epoch_save_checkpoint = 1
 
-
     print("Training Unfolded GCN...")
     max_val_score = 0
     epoch_checkpoint = num_epochs // 10
@@ -560,262 +570,6 @@ def UGCN(
 
     if return_model:
         return right, model, best_model_acc
-
-    else:
-        return right
-
-
-# def UGCN_regression_legacy(
-#     As,
-#     node_labels,
-#     node_attributes=None,
-#     train_mask=None,
-#     test_mask=None,
-#     return_model=False,
-#     num_epochs=201,
-#     hidden_channels=16,
-# ):
-
-#     n = As[0].shape[0]
-#     T = len(As)
-
-#     # As we're doing regression make sure that the labels are float type
-#     node_labels = np.float64(node_labels)
-
-#     # default masks are selected randomly
-#     if train_mask is None and test_mask is None:
-#         train_test_ratio = 0.1
-#         train_mask = np.random.choice(
-#             [True, False], size=n * T, p=[train_test_ratio, 1 - train_test_ratio]
-#         )
-#         test_mask = ~train_mask
-
-#     assert train_mask is not None
-#     assert test_mask is not None
-#     assert len(node_labels) == n * len(As)
-
-#     if node_attributes is None:
-#         dyn_node_attributes = None
-#         anch_node_attributes = None
-#     else:
-#         assert node_attributes.shape[0] == n * (len(As) + 1)
-
-#         dyn_node_attributes = node_attributes[n:, :].reshape((n * len(As), -1))
-#         anch_node_attributes = node_attributes[:n, :].reshape((n, -1))
-
-#     print("Removing dyn node attributes for now")
-#     dataset = Dynamic_Network(
-#         As,
-#         node_labels,
-#         train_mask,
-#         test_mask,  # x=dyn_node_attributes
-#     )
-#     print("Using a single identity for unfolded attributes")
-#     dataset_UA = Unfolded_Network(dataset, use_identity=True)
-
-#     class GCN_UA(torch.nn.Module):
-#         def __init__(self, hidden_channels):
-#             super().__init__()
-#             torch.manual_seed(1234567)
-#             self.conv1 = GCNConv(dataset_UA.num_features, hidden_channels)
-#             # self.conv2 = GCNConv(hidden_channels, dataset_UA.num_features)
-#             self.conv2 = GCNConv(hidden_channels, 1)
-#             # self.linear1 = torch.nn.Linear(dataset_UA.num_features, 1)
-
-#         def forward(self, x, edge_index, edge_weight):
-#             x = self.conv1(x, edge_index, edge_weight)
-#             x = x.relu()
-#             x = F.dropout(x, p=0.5, training=self.training)
-#             x = self.conv2(x, edge_index, edge_weight)
-#             # x = self.linear1(x)
-#             return x
-
-#     def UGCN_train(data):
-#         # data.x = data.x.float()
-#         # # data.edge_index = data.edge_index.float()
-#         # data.edge_weight = data.edge_weight.float()
-#         # data.y = data.y.float()
-
-#         model.train()
-#         optimizer.zero_grad()  # Clear gradients.
-#         out = model(
-#             data.x, data.edge_index, data.edge_weight
-#         )  # Perform a single forward pass.
-#         loss = criterion(
-#             out[data.train_mask].reshape(-1),
-#             data.y[data.train_mask],
-#         )  # Compute the loss solely based on the training nodes.
-#         loss.backward()  # Derive gradients.
-#         optimizer.step()  # Update parameters based on gradients.
-#         return loss
-
-#     def UGCN_test(data):
-#         model.eval()
-#         out = model(data.x, data.edge_index, data.edge_weight)
-#         # Calculate the RMSE
-#         mse = criterion(out[data.test_mask].reshape(-1), data.y[data.test_mask])
-#         rmse = torch.sqrt(mse)
-#         return rmse.item()
-
-#     model = GCN_UA(hidden_channels=hidden_channels)
-
-#     # criterion = torch.nn.CrossEntropyLoss()  # Define loss criterion.
-#     criterion = torch.nn.MSELoss()
-
-#     optimizer = torch.optim.Adam(model.parameters())  # Define optimizer.
-
-#     print("Training UGCN...")
-#     epoch_checkpoint = num_epochs // 10
-#     if epoch_checkpoint == 0:
-#         epoch_checkpoint = 1  # Stop division by zero if num_epochs < 10
-
-#     for epoch in tqdm(range(1, num_epochs)):
-#         loss = UGCN_train(dataset_UA[0])
-#         rmse = UGCN_test(dataset_UA[0])
-
-#         if epoch % epoch_checkpoint == 0:
-#             print(f"Epoch: {epoch:03d}, Loss: {loss:.4f}, RMSE: {rmse:.4f}")
-
-#     print(f"Training finished. RMSE: {UGCN_test(dataset_UA[0]):.4f}")
-#     output_UA = (
-#         model(dataset_UA[0].x, dataset_UA[0].edge_index, dataset_UA[0].edge_weight)
-#         .detach()
-#         .numpy()
-#     )
-
-#     right = output_UA[n:, :]
-#     left = output_UA[:n, :]
-
-#     if return_model:
-#         return right, model
-
-#     else:
-#         return right
-
-
-def UGCN_regression(
-    As,
-    node_labels,
-    node_attributes=None,
-    train_mask=None,
-    test_mask=None,
-    return_model=False,
-    num_epochs=201,
-    hidden_channels=16,
-):
-
-    n = As[0].shape[0]
-    T = len(As)
-
-    # As we're doing regression make sure that the labels are float type
-    node_labels = np.float64(node_labels)
-
-    # default masks are selected randomly
-    if train_mask is None and test_mask is None:
-        train_test_ratio = 0.1
-        train_mask = np.random.choice(
-            [True, False], size=n * T, p=[train_test_ratio, 1 - train_test_ratio]
-        )
-        test_mask = ~train_mask
-
-    assert train_mask is not None
-    assert test_mask is not None
-    assert len(node_labels) == n * len(As)
-
-    if node_attributes is None:
-        dyn_node_attributes = None
-        anch_node_attributes = None
-    else:
-        assert node_attributes.shape[0] == n * (len(As) + 1)
-
-        dyn_node_attributes = node_attributes[n:, :].reshape((n * len(As), -1))
-        anch_node_attributes = node_attributes[:n, :].reshape((n, -1))
-
-    print("Removing dyn node attributes for now")
-    dataset = Dynamic_Network(
-        As,
-        node_labels,
-        train_mask,
-        test_mask,  # x=dyn_node_attributes
-    )
-    print("Using a single identity for unfolded attributes")
-    dataset_UA = Unfolded_Network(dataset, use_identity=True)
-
-    class GCN_UA(torch.nn.Module):
-        def __init__(self, hidden_channels):
-            super().__init__()
-            torch.manual_seed(1234567)
-            self.conv1 = GCNConv(dataset_UA.num_features, hidden_channels)
-            # self.conv2 = GCNConv(hidden_channels, dataset_UA.num_features)
-            self.conv2 = GCNConv(hidden_channels, 1)
-            # self.linear1 = torch.nn.Linear(dataset_UA.num_features, 1)
-
-        def forward(self, x, edge_index, edge_weight):
-            x = self.conv1(x, edge_index, edge_weight)
-            x = x.relu()
-            x = F.dropout(x, p=0.5, training=self.training)
-            x = self.conv2(x, edge_index, edge_weight)
-            # x = self.linear1(x)
-            return x
-
-    def UGCN_train(data):
-        # data.x = data.x.float()
-        # # data.edge_index = data.edge_index.float()
-        # data.edge_weight = data.edge_weight.float()
-        # data.y = data.y.float()
-
-        model.train()
-        optimizer.zero_grad()  # Clear gradients.
-        out = model(
-            data.x, data.edge_index, data.edge_weight
-        )  # Perform a single forward pass.
-        loss = criterion(
-            out[data.train_mask].reshape(-1),
-            data.y[data.train_mask],
-        )  # Compute the loss solely based on the training nodes.
-        loss.backward()  # Derive gradients.
-        optimizer.step()  # Update parameters based on gradients.
-        return loss
-
-    def UGCN_test(data):
-        model.eval()
-        out = model(data.x, data.edge_index, data.edge_weight)
-        # Calculate the RMSE
-        mse = criterion(out[data.test_mask].reshape(-1), data.y[data.test_mask])
-        rmse = torch.sqrt(mse)
-        return rmse.item()
-
-    model = GCN_UA(hidden_channels=hidden_channels)
-
-    # criterion = torch.nn.CrossEntropyLoss()  # Define loss criterion.
-    criterion = torch.nn.MSELoss()
-
-    optimizer = torch.optim.Adam(model.parameters())  # Define optimizer.
-
-    print("Training UGCN...")
-    epoch_checkpoint = num_epochs // 10
-    if epoch_checkpoint == 0:
-        epoch_checkpoint = 1  # Stop division by zero if num_epochs < 10
-
-    for epoch in tqdm(range(1, num_epochs)):
-        loss = UGCN_train(dataset_UA[0])
-        rmse = UGCN_test(dataset_UA[0])
-
-        if epoch % epoch_checkpoint == 0:
-            print(f"Epoch: {epoch:03d}, Loss: {loss:.4f}, RMSE: {rmse:.4f}")
-
-    print(f"Training finished. RMSE: {UGCN_test(dataset_UA[0]):.4f}")
-    output_UA = (
-        model(dataset_UA[0].x, dataset_UA[0].edge_index, dataset_UA[0].edge_weight)
-        .detach()
-        .numpy()
-    )
-
-    right = output_UA[n:, :]
-    left = output_UA[:n, :]
-
-    if return_model:
-        return right, model
 
     else:
         return right
@@ -974,6 +728,7 @@ def block_GAT(
     else:
         return output_BD
 
+
 def UGAT(
     As,
     node_labels,
@@ -1074,7 +829,6 @@ def UGAT(
 
         if epoch_save_checkpoint == 0:
             epoch_save_checkpoint = 1
-
 
     print("Training Unfolded GAT...")
     max_val_score = 0
