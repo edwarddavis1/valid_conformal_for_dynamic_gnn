@@ -1,0 +1,13 @@
+matplotlib==3.8.4
+pycountry==23.12.11
+networkx==3.3
+numba==0.59.1
+numpy==1.26.4
+pandas==1.5.3
+plotly==5.21.0
+scikit_learn==1.4.2
+scipy==1.12.0
+seaborn==0.13.2
+torch==2.0.0
+torch_geometric==2.5.3
+tqdm==4.66.2
