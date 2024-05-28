@@ -1,5 +1,6 @@
 # Valid Conformal Prediction for Dynamic GNNs
 
+This repository contains code for the paper: [Link pending]
 
 ## Getting Started
 
