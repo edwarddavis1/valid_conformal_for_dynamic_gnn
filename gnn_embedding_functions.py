@@ -1,4 +1,5 @@
 import numpy as np
+import os
 from scipy.linalg import block_diag
 from scipy import sparse
 from tqdm import tqdm
@@ -300,6 +301,9 @@ def block_GCN(
     if epoch_checkpoint == 0:
         epoch_checkpoint = 1  # Stop division by zero if num_epochs < 10
 
+    if not os.path.exists(model_save_dir):
+        os.makedirs(model_save_dir)
+
     max_val_score = 0
     for epoch in tqdm(range(1, num_epochs + 1)):
         loss = BD_train(model, dataset_BD[0])
@@ -533,6 +537,9 @@ def UGCN(
     if epoch_checkpoint == 0:
         epoch_checkpoint = 1  # Stop division by zero if num_epochs < 10
 
+    if not os.path.exists(model_save_dir):
+        os.makedirs(model_save_dir)
+
     for epoch in tqdm(range(1, num_epochs + 1)):
         loss = UGCN_train(model, dataset_UA[0])
         val_acc = UGCN_val(model, dataset_UA[0])
@@ -690,6 +697,9 @@ def block_GAT(
     if epoch_checkpoint == 0:
         epoch_checkpoint = 1  # Stop division by zero if num_epochs < 10
 
+    if not os.path.exists(model_save_dir):
+        os.makedirs(model_save_dir)
+
     max_val_score = 0
     for epoch in tqdm(range(1, num_epochs + 1)):
         loss = BD_train(model, dataset_BD[0])
@@ -835,6 +845,9 @@ def UGAT(
     epoch_checkpoint = num_epochs // 10
     if epoch_checkpoint == 0:
         epoch_checkpoint = 1  # Stop division by zero if num_epochs < 10
+        
+    if not os.path.exists(model_save_dir):
+        os.makedirs(model_save_dir)
 
     for epoch in tqdm(range(1, num_epochs + 1)):
         loss = UGAT_train(model, dataset_UA[0])
