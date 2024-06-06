@@ -115,6 +115,17 @@ num_classes = len(node_labels_enc.categories)
 
 assert node_labels.shape[0] == n * T
 # %%
+# (For the dataset plotting script - not required for the experiments to run)
+
+from scipy import sparse
+
+As_sparse = [sparse.csr_matrix(A) for A in As]
+for i, A_sparse in enumerate(As_sparse):
+    sparse.save_npz(f"datasets/tgbn-trade/tgbn-trade_As_{i}.npz", A_sparse)
+
+np.save(f"datasets/tgbn-trade/tgbn-trade_node_labels.npy", node_labels)
+
+# %%
 masked_labels = node_labels[data_mask.flatten()]
 time_labels = np.repeat(np.arange(T), n)
 masked_time_labels = time_labels[data_mask.flatten()]

@@ -170,6 +170,17 @@ node_labels_enc = pd.Categorical(country_labels)
 node_labels = np.tile(node_labels_enc.codes, T)
 As = As_euro
 
+# %%
+# (For the dataset plotting script - not required for the experiments to run)
+
+from scipy import sparse
+
+As_sparse = [sparse.csr_matrix(A) for A in As]
+for i, A_sparse in enumerate(As_sparse):
+    sparse.save_npz(f"datasets/flight_data/flight_As_{i}.npz", A_sparse)
+
+np.save(f"datasets/flight_data/flight_node_labels.npy", node_labels)
+
 
 # %%
 class Dynamic_Network(Dataset):

@@ -11,3 +11,4 @@ seaborn==0.13.2
 torch==2.0.0
 torch_geometric==2.5.3
 tqdm==4.66.2
+git+https://github.com/iggallagher/Spectral-Embedding
