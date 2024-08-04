@@ -28,6 +28,13 @@ props = np.array([0.2, 0.1, 0.35, 0.35])
 # Target 1-coverage for conformal prediction
 alpha = 0.1
 
+# print("WARNING: reduced parameters")
+# num_train_trans = 2
+# num_permute_trans = 1
+# num_train_semi_ind = 2
+# num_epochs = 1
+
+
 # Number of experiments
 num_train_trans = 10
 num_permute_trans = 100
@@ -40,7 +47,8 @@ num_channels_GAT = 32
 
 
 # Save results
-results_file = f"results/Conformal_GNN_{dataset_name}_Results.pkl"
+# results_file = f"results/Conformal_GNN_{dataset_name}_Results.pkl"
+results_file = f"results/{dataset_name}_with_assisted_semi_ind.pkl"
 
 # %% [markdown]
 # ## Load dataset
@@ -422,7 +430,7 @@ def mask_split(mask, split_props, seed=0, mode="transductive"):
 
     if mode == "transductive":
         # Flatten mask array into one dimension in blocks of nodes per time
-        flat_mask = mask.T.reshape(-1)
+        flat_mask = mask.reshape(-1)
         n_masks = np.sum(flat_mask)
 
         # Split shuffled flatten mask array indices into correct proportions
@@ -432,18 +440,20 @@ def mask_split(mask, split_props, seed=0, mode="transductive"):
         split_idx = np.split(flat_mask_idx, split_ns)
 
     if mode == "semi-inductive":
+        flat_mask = mask.reshape(-1)
+
         # Find time such that final proportion of masks happen after that time
         T_trunc = np.where(
             np.cumsum(np.sum(mask, axis=0) / np.sum(mask)) >= 1 - split_props[-1]
         )[0][0]
 
-        # Flatten mask arrays into one dimension in blocks of nodes per time
-        flat_mask_start = mask[:, :T_trunc].T.reshape(-1)
-        flat_mask_end = mask[:, T_trunc:].T.reshape(-1)
-        n_masks_start = np.sum(flat_mask_start)
+        flat_mask_idx = np.where(flat_mask)[0]
+        flat_mask_start_idx = flat_mask_idx[: n * T_trunc]
+        flat_mask_end_idx = flat_mask_idx[n * T_trunc :]
+
+        n_masks_start = len(flat_mask_start_idx)
 
         # Split starting shuffled flatten mask array into correct proportions
-        flat_mask_start_idx = np.where(flat_mask_start)[0]
         np.random.shuffle(flat_mask_start_idx)
         split_props_start = split_props[:-1] / np.sum(split_props[:-1])
         split_ns = np.cumsum(
@@ -452,13 +462,49 @@ def mask_split(mask, split_props, seed=0, mode="transductive"):
         split_idx = np.split(flat_mask_start_idx, split_ns)
 
         # Place finishing flatten mask array at the end
-        split_idx.append(n * T_trunc + np.where(flat_mask_end)[0])
+        split_idx.append(flat_mask_end_idx)
+
+    if mode == "assisted semi-inductive":
+        flat_mask = mask.reshape(-1)
+
+        # Find time such that final proportion of masks happen after that time
+        T_trunc = np.where(
+            np.cumsum(np.sum(mask, axis=0) / np.sum(mask)) >= 1 - split_props[-1]
+        )[0][0]
+
+        flat_mask_idx = np.where(flat_mask)[0]
+        flat_mask_start_idx = flat_mask_idx[: n * T_trunc]
+        flat_mask_end_idx = flat_mask_idx[n * T_trunc :]
+
+        n_masks_start = len(flat_mask_start_idx)
+
+        # Split starting shuffled flatten mask array into correct proportions
+        np.random.shuffle(flat_mask_start_idx)
+        split_props_start = split_props[:-2] / np.sum(split_props[:-2])
+        split_ns = np.cumsum(
+            [round(n_masks_start * prop) for prop in split_props_start[:-1]]
+        )
+        split_idx = np.split(flat_mask_start_idx, split_ns)
+
+        # # Place finishing flatten mask array at the end
+        # split_idx.append(flat_mask_end_idx)
+
+        # Do the same for after T_trunc
+        n_masks_end = len(flat_mask_end_idx)
+        np.random.shuffle(flat_mask_end_idx)
+        split_props_end = split_props[-2:] / np.sum(split_props[-2:])
+        split_ns = np.cumsum(
+            [round(n_masks_end * prop) for prop in split_props_end[:-1]]
+        )
+        split_idx.append(np.split(flat_mask_end_idx, split_ns)[0])
+        split_idx.append(np.split(flat_mask_end_idx, split_ns)[1])
 
     split_masks = np.array([[False] * n * T for _ in range(len(split_props))])
     for i in range(len(split_props)):
         split_masks[i, split_idx[i]] = True
 
     return split_masks
+
 
 
 # %%
@@ -562,7 +608,8 @@ results = {}
 
 methods = ["BD", "UA"]
 GNN_models = ["GCN", "GAT"]
-regimes = ["Trans", "Semi-Ind"]
+regimes = ["Assisted Semi-Ind", "Trans", "Semi-Ind"]
+# regimes = ["Trans", "Semi-Ind"]
 outputs = ["Accuracy", "Avg Size", "Coverage"]
 times = ["All"] + list(range(T))
 
@@ -582,10 +629,112 @@ for method in methods:
                     results[method][GNN_model][regime][output][time] = []
 
 # %% [markdown]
+# ### Assisted Semi-inductive experiments
+
+# %%
+
+for method, GNN_model in product(methods, GNN_models):
+
+    for i in range(num_train_trans):
+        # Split data into training/validation/calibration/test
+        train_mask, valid_mask, calib_mask, test_mask = mask_split(
+            data_mask, props, seed=i, mode="assisted semi-inductive"
+        )
+
+        if method == "BD":
+            method_str = "Block Diagonal"
+            data = dataset_BD
+        if method == "UA":
+            method_str = "Unfolded"
+            data = dataset_UA
+            # Pad masks to include anchor nodes
+            train_mask = np.concatenate((np.array([False] * n), train_mask))
+            valid_mask = np.concatenate((np.array([False] * n), valid_mask))
+            calib_mask = np.concatenate((np.array([False] * n), calib_mask))
+            test_mask = np.concatenate((np.array([False] * n), test_mask))
+
+        if GNN_model == "GCN":
+            model = GCN(data.num_nodes, num_channels_GCN, num_classes, seed=i)
+        if GNN_model == "GAT":
+            model = GAT(data.num_nodes, num_channels_GAT, num_classes, seed=i)
+
+        optimizer = torch.optim.Adam(model.parameters())
+
+        print(f"Training {method_str} {GNN_model} Number {i}")
+        max_valid_acc = 0
+
+        for epoch in tqdm(range(num_epochs)):
+            train_loss = train(model, data, train_mask)
+            valid_acc = valid(model, data, valid_mask)
+
+            if valid_acc > max_valid_acc:
+                max_valid_acc = valid_acc
+                best_model = copy.deepcopy(model)
+
+        best_output = best_model(data.x, data.edge_index, data.edge_weight)
+        print(f"Best valid: {max_valid_acc:.4f}")
+        print(f"Evaluating {method_str} {GNN_model} Number {i}")
+
+        coverage_list = []
+        for j in tqdm(range(num_permute_trans)):
+            # Permute the calibration and test datasets
+            calib_mask, test_mask = mask_mix(calib_mask, test_mask, seed=j)
+
+            pred_sets = get_prediction_sets(
+                best_output, data, calib_mask, test_mask, alpha
+            )
+
+            cov = coverage(pred_sets, data, test_mask)
+            coverage_list.append(cov)
+            results[method][GNN_model]["Assisted Semi-Ind"]["Accuracy"]["All"].append(
+                accuracy(best_output, data, test_mask)
+            )
+            results[method][GNN_model]["Assisted Semi-Ind"]["Avg Size"]["All"].append(
+                avg_set_size(pred_sets, test_mask)
+            )
+            results[method][GNN_model]["Assisted Semi-Ind"]["Coverage"]["All"].append(
+                cov
+            )
+
+            for t in range(T):
+                # Consider test nodes only at time t
+                if method == "BD":
+                    time_mask = np.array([[False] * n for _ in range(T)])
+                    time_mask[t] = True
+                    time_mask = time_mask.reshape(-1)
+                if method == "UA":
+                    time_mask = np.array([[False] * n for _ in range(T + 1)])
+                    time_mask[t + 1] = True
+                    time_mask = time_mask.reshape(-1)
+
+                test_mask_t = time_mask * test_mask
+                if np.sum(test_mask_t) == 0:
+                    continue
+
+                # Get prediction sets corresponding to time t
+                index_mapping = {
+                    index: i for i, index in enumerate(np.where(test_mask)[0])
+                }
+                indices = [index_mapping[index] for index in np.where(test_mask_t)[0]]
+                pred_sets_t = pred_sets[np.array(indices)]
+
+                results[method][GNN_model]["Assisted Semi-Ind"]["Accuracy"][t].append(
+                    accuracy(best_output, data, test_mask_t)
+                )
+                results[method][GNN_model]["Assisted Semi-Ind"]["Avg Size"][t].append(
+                    avg_set_size(pred_sets_t, test_mask_t)
+                )
+                results[method][GNN_model]["Assisted Semi-Ind"]["Coverage"][t].append(
+                    coverage(pred_sets_t, data, test_mask_t)
+                )
+
+        print("Coverage: ", np.mean(coverage_list))
+
+
+# %% [markdown]
 # ### Transductive experiments
 
 # %%
-# %%time
 
 for method, GNN_model in product(methods, GNN_models):
 
@@ -686,7 +835,6 @@ for method, GNN_model in product(methods, GNN_models):
 # ### Semi-inductive experiments
 
 # %%
-# %%time
 
 for method, GNN_model in product(methods, GNN_models):
 
@@ -787,3 +935,5 @@ for method, GNN_model in product(methods, GNN_models):
 # %%
 with open(results_file, "wb") as file:
     pickle.dump(results, file)
+
+# %%

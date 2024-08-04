@@ -4,32 +4,33 @@ from itertools import product
 import numpy as np
 import pandas as pd
 import pickle
+from scipy.linalg import block_diag
+import spectral_embedding as se
 from tqdm import tqdm
+
 import torch
 from torch.functional import F
+
 import torch_geometric
-from torch_geometric.data import Dataset
+from torch_geometric.data import Data, Dataset
 from torch_geometric.nn import GATConv, GCNConv
-from scipy import sparse
-from torch_geometric.utils import to_scipy_sparse_matrix
 
 # %% [markdown]
 # ## Experiment parameters
 
 # %%
-dataset_name = "Trade"
-
-
 # Training/validation/calibration/test dataset split sizes
 props = np.array([0.2, 0.1, 0.35, 0.35])
 
 # Target 1-coverage for conformal prediction
 alpha = 0.1
 
-# num_train_trans = 1
-# num_permute_trans = 2
+# print("WARNING: reduced parameters")
+# num_train_trans = 2
+# num_permute_trans = 1
 # num_train_semi_ind = 2
-# num_epochs = 1
+# num_epochs = 10
+
 
 # Number of experiments
 num_train_trans = 10
@@ -37,89 +38,48 @@ num_permute_trans = 100
 num_train_semi_ind = 50
 
 # GNN model parameters
-num_epochs = 40
-num_channels_GCN = 32
-num_channels_GAT = 32
-
+num_epochs = 200
+num_channels_GCN = 16
+num_channels_GAT = 16
+learning_rate = 0.01
+weight_decay = 5e-4
 
 # Save results
-# results_file = f"results/Conformal_GNN_{dataset_name}_Results.pkl"
-results_file = f"results/{dataset_name}_with_assisted_semi_ind.pkl"
+# results_file = 'results/Conformal_GNN_SBM_Results_10_100_50.pkl'
+# results_file = 'results/Conformal_GNN_SBM_Results_10_100_50.pkl'
+results_file = f"results/SBM_with_assisted_semi_ind.pkl"
 
 # %% [markdown]
-# ## Load dataset
+# ## Generate dataset
 
 # %%
-edges_df = pd.read_csv("datasets/trade/tgbn-trade_edgelist.csv")
+np.random.seed(42)
 
-nation = edges_df["nation"].values
-trading_nation = edges_df["trading nation"].values
-unique_countries = np.unique(np.concatenate((nation, trading_nation)))
-n = len(unique_countries)
-
-country_to_idx = {country: idx for idx, country in enumerate(unique_countries)}
-idx_to_country = {idx: country for country, idx in country_to_idx.items()}
-
-srcs = [country_to_idx[country] for country in nation]
-dsts = [country_to_idx[country] for country in trading_nation]
-weights = edges_df["weight"].values
-times = np.unique(edges_df["year"].values)
-
-As = []
-for t in tqdm(times):
-    if t == 2016:
-        continue
-
-    mask = edges_df["year"] == t
-    srcs_t = torch.tensor(srcs)[mask]
-    dsts_t = torch.tensor(dsts)[mask]
-    edge_index = torch.stack([srcs_t, dsts_t])
-    edge_weight = torch.tensor(weights)[mask]
-
-    A = to_scipy_sparse_matrix(edge_index, edge_weight, num_nodes=n)
-    As.append(A)
-
-T = len(As)
+# %% [markdown]
+# Set dynamic SBM parameters.
 
 # %%
-labels_df = pd.read_csv("datasets/trade/tgbn-trade_node_labels.csv")
+K = 3
+n = 100 * K
+T = 8
+pi = np.repeat(1 / K, K)
 
-# For each nation at each year, find the trading nation with the highest weight
-# This will be the label for the node
+a = [0.08, 0.16]
+Bs = 0.02 * np.ones((T, K, K))
 
-data_mask = np.array([[True] * T for _ in range(n)])
-labels = np.zeros((n, T))
-# 1: to skip 1986 as we don't have a label for that
-for year_idx, year in tqdm(enumerate(times[1:])):
-    label_df_t = labels_df[labels_df["year"] == year]
-
-    for country in unique_countries:
-        country_enc = country_to_idx[country]
-
-        label_df_country = label_df_t[label_df_t["nation"] == country]
-
-        if len(label_df_country) == 0:
-            labels[country_enc, year_idx] = np.nan
-            data_mask[country_enc, year_idx] = False
-            continue
-
-        max_weight = label_df_country["weight"].max()
-        max_weight_country = label_df_country[label_df_country["weight"] == max_weight][
-            "trading nation"
-        ].values[0]
-
-        labels[country_enc, year_idx] = country_to_idx[max_weight_country]
+T_list = [t for t in range(T)]
+np.random.shuffle(T_list)
 
 for t in range(T):
-    data_mask[np.where(np.sum(As[t], axis=0) == 0)[0], t] = False
+    for k in range(K):
+        Bs[t, k, k] = a[(T_list[t] & (1 << k)) >> k]
 
-flat_labels = labels.flatten()
-node_labels_enc = pd.Categorical(flat_labels)
-node_labels = node_labels_enc.codes
+# %%
+As, Z = se.generate_SBM_dynamic(n, Bs, pi)
 
-num_classes = len(node_labels_enc.categories)
+node_labels = np.tile(Z, T)
+num_classes = K
 
-assert node_labels.shape[0] == n * T
 # %%
 # (For the dataset plotting script - not required for the experiments to run)
 
@@ -127,35 +87,15 @@ from scipy import sparse
 
 As_sparse = [sparse.csr_matrix(A) for A in As]
 for i, A_sparse in enumerate(As_sparse):
-    sparse.save_npz(f"datasets/trade/tgbn-trade_As_{i}.npz", A_sparse)
+    sparse.save_npz(f"datasets/sbm/sbm_As_{i}.npz", A_sparse)
 
-np.save(f"datasets/trade/tgbn-trade_node_labels.npy", node_labels)
+np.save(f"datasets/sbm/sbm_node_labels.npy", node_labels)
 
-# %%
-masked_labels = node_labels[data_mask.flatten()]
-time_labels = np.repeat(np.arange(T), n)
-masked_time_labels = time_labels[data_mask.flatten()]
+# %% [markdown]
+# ## GNN functions
 
-len(masked_time_labels)
-
-avg_labels = []
-for time in np.unique(masked_time_labels):
-    time_mask = masked_time_labels == time
-    avg_labels.append(np.mean(masked_labels[time_mask]))
-
-# %%
-num_edges = []
-for A in As:
-    A_binary = np.where(A.todense() > 0, 1, 0)
-    num_edges.append(np.sum(A_binary))
-
-
-# %%
-edges = 0
-for t in range(T):
-    A_t = As[t].todense()
-    A_binary = np.where(A_t > 0, 1, 0)
-    edges += np.sum(A_binary)
+# %% [markdown]
+# Dynamic network class that puts a list of adjacency matrices along with class labels into a pytorch geometric dataset. This is then used to create the block diagonal and dilated unfolded adjacency matrices for input into the graph neural networks.
 
 
 # %%
@@ -166,33 +106,22 @@ class Dynamic_Network(Dataset):
 
     def __init__(self, As, labels):
         self.As = As
-        self.T = len(As)
-        self.n = As[0].shape[0]
+        self.T = As.shape[0]
+        self.n = As.shape[1]
         self.classes = labels
-
-        assert len(labels) == self.n * self.T
 
     def __len__(self):
         return len(self.As)
 
     def __getitem__(self, idx):
-        x = torch.sparse.spdiags(
-            torch.ones(self.n),
-            offsets=torch.tensor([0]),
-            shape=(self.n, self.n),
-        )
+        x = torch.tensor(np.eye(self.n), dtype=torch.float)
         edge_index = torch.tensor(
             np.array([self.As[idx].nonzero()]), dtype=torch.long
         ).reshape(2, -1)
-        edge_weight = torch.tensor(np.array(self.As[idx].data), dtype=torch.float)
-        y = torch.tensor(
-            self.classes[self.n * idx : self.n * (idx + 1)], dtype=torch.long
-        )
+        y = torch.tensor(self.classes, dtype=torch.long)
 
         # Create a PyTorch Geometric data object
-        data = torch_geometric.data.Data(
-            x=x, edge_index=edge_index, edge_weight=edge_weight, y=y
-        )
+        data = torch_geometric.data.Data(x=x, edge_index=edge_index, y=y)
         data.num_nodes = self.n
 
         return data
@@ -205,100 +134,63 @@ class Block_Diagonal_Network(Dataset):
     """
 
     def __init__(self, dataset):
-        self.A = sparse.block_diag(dataset.As)
+        self.A = block_diag(*dataset.As)
         self.T = dataset.T
         self.n = dataset.n
         self.classes = dataset.classes
-
-        assert len(self.classes) == self.n * self.T
 
     def __len__(self):
         return 1
 
     def __getitem__(self, idx):
-        x = torch.sparse.spdiags(
-            torch.ones(self.n * (self.T)),
-            offsets=torch.tensor([0]),
-            shape=(self.n * (self.T), self.n * (self.T)),
-        )
+        x = torch.tensor(np.eye(self.n * self.T), dtype=torch.float)
         edge_index = torch.tensor(
             np.array([self.A.nonzero()]), dtype=torch.long
         ).reshape(2, -1)
-        edge_weight = torch.tensor(np.array(self.A.data), dtype=torch.float)
         y = torch.tensor(self.classes, dtype=torch.long)
 
         # Create a PyTorch Geometric data object
-        data = torch_geometric.data.Data(
-            x=x, edge_index=edge_index, edge_weight=edge_weight, y=y
-        )
+        data = torch_geometric.data.Data(x=x, edge_index=edge_index, y=y)
         data.num_nodes = self.n * self.T
 
         return data
 
 
 # %%
-def general_unfolded_matrix(As, sparse_matrix=False):
-    """Forms the general unfolded matrix from an adjacency series"""
-    T = len(As)
-    n = As[0].shape[0]
-
-    # Construct the rectangular unfolded adjacency
-    if sparse_matrix:
-        A = As[0]
-        for t in range(1, T):
-            A = sparse.hstack((A, As[t]))
-
-        # Construct the dilated unfolded adjacency matrix
-        DA = sparse.bmat([[None, A], [A.T, None]])
-        DA = sparse.csr_matrix(DA)
-    else:
-        A = As[0]
-        for t in range(1, T):
-            A = np.block([A, As[t]])
-
-        DA = np.zeros((n + n * T, n + n * T))
-        DA[0:n, n:] = A
-        DA[n:, 0:n] = A.T
-
-    return DA
-
-
 class Unfolded_Network(Dataset):
     """
     A pytorch geometric dataset for the dilated unfolding of a Dynamic Network object.
     """
 
     def __init__(self, dataset):
-        self.A = general_unfolded_matrix(dataset.As, sparse_matrix=True)
+        self.A_unf = np.block([dataset.As[t] for t in range(dataset.T)])
+        self.A = np.block(
+            [
+                [np.zeros((dataset.n, dataset.n)), self.A_unf],
+                [
+                    self.A_unf.T,
+                    np.zeros((dataset.n * dataset.T, dataset.n * dataset.T)),
+                ],
+            ]
+        )
         self.T = dataset.T
         self.n = dataset.n
         self.classes = dataset.classes
-
-        assert len(self.classes) == self.n * self.T
 
     def __len__(self):
         return 1
 
     def __getitem__(self, idx):
-        x = torch.sparse.spdiags(
-            torch.ones(self.n * (self.T + 1)),
-            offsets=torch.tensor([0]),
-            shape=(self.n * (self.T + 1), self.n * (self.T + 1)),
-        )
+        x = torch.tensor(np.eye(self.n * (self.T + 1)), dtype=torch.float)
         edge_index = torch.tensor(
             np.array([self.A.nonzero()]), dtype=torch.long
         ).reshape(2, -1)
-        edge_weight = torch.tensor(np.array(self.A.data), dtype=torch.float)
-
-        # Add n zeros to the start of y for the anchors
         y = torch.tensor(
             np.concatenate((np.zeros(self.n), self.classes)), dtype=torch.long
         )
 
         # Create a PyTorch Geometric data object
-        data = torch_geometric.data.Data(
-            x=x, edge_index=edge_index, edge_weight=edge_weight, y=y
-        )
+        data = torch_geometric.data.Data(x=x, edge_index=edge_index, y=y)
         data.num_nodes = self.n * (self.T + 1)
 
         return data
@@ -321,11 +213,11 @@ class GCN(torch.nn.Module):
         self.conv1 = GCNConv(num_nodes, num_channels)
         self.conv2 = GCNConv(num_channels, num_classes)
 
-    def forward(self, x, edge_index, edge_weight):
-        x = self.conv1(x, edge_index, edge_weight)
+    def forward(self, x, edge_index):
+        x = self.conv1(x, edge_index)
         x = x.relu()
         x = F.dropout(x, p=0.5, training=self.training)
-        x = self.conv2(x, edge_index, edge_weight)
+        x = self.conv2(x, edge_index)
 
         return x
 
@@ -337,11 +229,11 @@ class GAT(torch.nn.Module):
         self.conv1 = GATConv(num_nodes, num_channels)
         self.conv2 = GATConv(num_channels, num_classes)
 
-    def forward(self, x, edge_index, edge_weight):
-        x = self.conv1(x, edge_index, edge_weight)
+    def forward(self, x, edge_index):
+        x = self.conv1(x, edge_index)
         x = x.relu()
         x = F.dropout(x, p=0.5, training=self.training)
-        x = self.conv2(x, edge_index, edge_weight)
+        x = self.conv2(x, edge_index)
 
         return x
 
@@ -352,7 +244,7 @@ def train(model, data, train_mask):
     optimizer.zero_grad()
     criterion = torch.nn.CrossEntropyLoss()
 
-    out = model(data.x, data.edge_index, data.edge_weight)
+    out = model(data.x, data.edge_index)
     loss = criterion(out[train_mask], data.y[train_mask])
     loss.backward()
     optimizer.step()
@@ -363,7 +255,7 @@ def train(model, data, train_mask):
 def valid(model, data, valid_mask):
     model.eval()
 
-    out = model(data.x, data.edge_index, data.edge_weight)
+    out = model(data.x, data.edge_index)
     pred = out.argmax(dim=1)
     correct = pred[valid_mask] == data.y[valid_mask]
     acc = int(correct.sum()) / int(valid_mask.sum())
@@ -375,16 +267,14 @@ def valid(model, data, valid_mask):
 # ## Data split functions
 
 # %% [markdown]
-# Create a data mask that consists only of useful nodes for training and testing. We only consider nodes in a particular time window if it has degree greater than zero at that time window. Also, we ignore nodes with label `Teacher` meaning that the number of classes is now 10.
+# Create a data mask that consists only of useful nodes for training and testing. We only consider nodes in a particular time window if it has degree greater than zero at that time window.
 
 # %%
-# data_mask = np.array([[True] * T for _ in range(n)])
+data_mask = np.array([[True] * T for _ in range(n)])
 
-# for t in range(T):
-#     data_mask[np.where(np.sum(As[t], axis=0) == 0)[0], t] = False
-#     data_mask[np.where(node_labels == label_dict['Teachers'])[0], t] = False
+for t in range(T):
+    data_mask[np.where(np.sum(As[t], axis=0) == 0)[0], t] = False
 
-# num_classes = np.unique(node_labels).shape[0]
 print(
     f"Percentage of usable node/time pairs: {100 * np.sum(data_mask) / (n * T) :02.1f}%"
 )
@@ -398,7 +288,7 @@ def mask_split(mask, split_props, seed=0, mode="transductive"):
 
     if mode == "transductive":
         # Flatten mask array into one dimension in blocks of nodes per time
-        flat_mask = mask.reshape(-1)
+        flat_mask = mask.T.reshape(-1)
         n_masks = np.sum(flat_mask)
 
         # Split shuffled flatten mask array indices into correct proportions
@@ -408,20 +298,19 @@ def mask_split(mask, split_props, seed=0, mode="transductive"):
         split_idx = np.split(flat_mask_idx, split_ns)
 
     if mode == "semi-inductive":
-        flat_mask = mask.reshape(-1)
 
         # Find time such that final proportion of masks happen after that time
         T_trunc = np.where(
             np.cumsum(np.sum(mask, axis=0) / np.sum(mask)) >= 1 - split_props[-1]
         )[0][0]
 
-        flat_mask_idx = np.where(flat_mask)[0]
-        flat_mask_start_idx = flat_mask_idx[: n * T_trunc]
-        flat_mask_end_idx = flat_mask_idx[n * T_trunc :]
-
-        n_masks_start = len(flat_mask_start_idx)
+        # Flatten mask arrays into one dimension in blocks of nodes per time
+        flat_mask_start = mask[:, :T_trunc].T.reshape(-1)
+        flat_mask_end = mask[:, T_trunc:].T.reshape(-1)
+        n_masks_start = np.sum(flat_mask_start)
 
         # Split starting shuffled flatten mask array into correct proportions
+        flat_mask_start_idx = np.where(flat_mask_start)[0]
         np.random.shuffle(flat_mask_start_idx)
         split_props_start = split_props[:-1] / np.sum(split_props[:-1])
         split_ns = np.cumsum(
@@ -430,23 +319,22 @@ def mask_split(mask, split_props, seed=0, mode="transductive"):
         split_idx = np.split(flat_mask_start_idx, split_ns)
 
         # Place finishing flatten mask array at the end
-        split_idx.append(flat_mask_end_idx)
+        split_idx.append(n * T_trunc + np.where(flat_mask_end)[0])
 
     if mode == "assisted semi-inductive":
-        flat_mask = mask.reshape(-1)
 
         # Find time such that final proportion of masks happen after that time
         T_trunc = np.where(
             np.cumsum(np.sum(mask, axis=0) / np.sum(mask)) >= 1 - split_props[-1]
         )[0][0]
 
-        flat_mask_idx = np.where(flat_mask)[0]
-        flat_mask_start_idx = flat_mask_idx[: n * T_trunc]
-        flat_mask_end_idx = flat_mask_idx[n * T_trunc :]
-
-        n_masks_start = len(flat_mask_start_idx)
+        # Flatten mask arrays into one dimension in blocks of nodes per time
+        flat_mask_start = mask[:, :T_trunc].T.reshape(-1)
+        flat_mask_end = mask[:, T_trunc:].T.reshape(-1)
+        n_masks_start = np.sum(flat_mask_start)
 
         # Split starting shuffled flatten mask array into correct proportions
+        flat_mask_start_idx = np.where(flat_mask_start)[0]
         np.random.shuffle(flat_mask_start_idx)
         split_props_start = split_props[:-2] / np.sum(split_props[:-2])
         split_ns = np.cumsum(
@@ -454,18 +342,15 @@ def mask_split(mask, split_props, seed=0, mode="transductive"):
         )
         split_idx = np.split(flat_mask_start_idx, split_ns)
 
-        # # Place finishing flatten mask array at the end
-        # split_idx.append(flat_mask_end_idx)
-
         # Do the same for after T_trunc
-        n_masks_end = len(flat_mask_end_idx)
+        flat_mask_end_idx = np.where(flat_mask_end)[0]
         np.random.shuffle(flat_mask_end_idx)
         split_props_end = split_props[-2:] / np.sum(split_props[-2:])
         split_ns = np.cumsum(
-            [round(n_masks_end * prop) for prop in split_props_end[:-1]]
+            [round(n_masks_start * prop) for prop in split_props_end[:-1]]
         )
-        split_idx.append(np.split(flat_mask_end_idx, split_ns)[0])
-        split_idx.append(np.split(flat_mask_end_idx, split_ns)[1])
+        split_idx.append(n * T_trunc + np.split(flat_mask_end_idx, split_ns)[0])
+        split_idx.append(n * T_trunc + np.split(flat_mask_end_idx, split_ns)[1])
 
     split_masks = np.array([[False] * n * T for _ in range(len(split_props))])
     for i in range(len(split_props)):
@@ -514,7 +399,6 @@ print(f"Percentage test:  {100 * np.sum(test_mask)  / np.sum(data_mask) :02.1f}%
 # %%
 def get_prediction_sets(output, data, calib_mask, test_mask, alpha=0.1):
     n_calib = calib_mask.sum()
-    # output = model(data.x, data.edge_index, data.edge_weight)
 
     # Compute softmax probabilities
     smx = torch.nn.Softmax(dim=1)
@@ -542,7 +426,6 @@ def get_prediction_sets(output, data, calib_mask, test_mask, alpha=0.1):
 
 # %%
 def accuracy(output, data, test_mask):
-    # output = model(data.x, data.edge_index, data.edge_weight)
     pred = output.argmax(dim=1)
     correct = pred[test_mask] == data.y[test_mask]
     acc = int(correct.sum()) / int(test_mask.sum())
@@ -599,6 +482,7 @@ for method in methods:
 # ### Assisted Semi-inductive experiments
 
 # %%
+
 for method, GNN_model in product(methods, GNN_models):
 
     for i in range(num_train_trans):
@@ -624,9 +508,11 @@ for method, GNN_model in product(methods, GNN_models):
         if GNN_model == "GAT":
             model = GAT(data.num_nodes, num_channels_GAT, num_classes, seed=i)
 
-        optimizer = torch.optim.Adam(model.parameters())
+        optimizer = torch.optim.Adam(
+            model.parameters(), lr=learning_rate, weight_decay=weight_decay
+        )
 
-        print(f"Training {method_str} {GNN_model} Number {i}")
+        print(f"\nTraining {method_str} {GNN_model} Number {i}")
         max_valid_acc = 0
 
         for epoch in tqdm(range(num_epochs)):
@@ -637,29 +523,24 @@ for method, GNN_model in product(methods, GNN_models):
                 max_valid_acc = valid_acc
                 best_model = copy.deepcopy(model)
 
-        best_output = best_model(data.x, data.edge_index, data.edge_weight)
-        print(f"Best valid: {max_valid_acc:.4f}")
         print(f"Evaluating {method_str} {GNN_model} Number {i}")
+        print(f"Validation accuracy: {max_valid_acc:0.3f}")
+        output = best_model(data.x, data.edge_index)
 
-        coverage_list = []
         for j in tqdm(range(num_permute_trans)):
             # Permute the calibration and test datasets
             calib_mask, test_mask = mask_mix(calib_mask, test_mask, seed=j)
 
-            pred_sets = get_prediction_sets(
-                best_output, data, calib_mask, test_mask, alpha
-            )
+            pred_sets = get_prediction_sets(output, data, calib_mask, test_mask, alpha)
 
-            cov = coverage(pred_sets, data, test_mask)
-            coverage_list.append(cov)
             results[method][GNN_model]["Assisted Semi-Ind"]["Accuracy"]["All"].append(
-                accuracy(best_output, data, test_mask)
+                accuracy(output, data, test_mask)
             )
             results[method][GNN_model]["Assisted Semi-Ind"]["Avg Size"]["All"].append(
                 avg_set_size(pred_sets, test_mask)
             )
             results[method][GNN_model]["Assisted Semi-Ind"]["Coverage"]["All"].append(
-                cov
+                coverage(pred_sets, data, test_mask)
             )
 
             for t in range(T):
@@ -678,14 +559,19 @@ for method, GNN_model in product(methods, GNN_models):
                     continue
 
                 # Get prediction sets corresponding to time t
-                index_mapping = {
-                    index: i for i, index in enumerate(np.where(test_mask)[0])
-                }
-                indices = [index_mapping[index] for index in np.where(test_mask_t)[0]]
-                pred_sets_t = pred_sets[np.array(indices)]
+                pred_sets_t = pred_sets[
+                    np.array(
+                        [
+                            np.where(
+                                np.where(test_mask)[0] == np.where(test_mask_t)[0][i]
+                            )[0][0]
+                            for i in range(sum(test_mask_t))
+                        ]
+                    )
+                ]
 
                 results[method][GNN_model]["Assisted Semi-Ind"]["Accuracy"][t].append(
-                    accuracy(best_output, data, test_mask_t)
+                    accuracy(output, data, test_mask_t)
                 )
                 results[method][GNN_model]["Assisted Semi-Ind"]["Avg Size"][t].append(
                     avg_set_size(pred_sets_t, test_mask_t)
@@ -694,12 +580,20 @@ for method, GNN_model in product(methods, GNN_models):
                     coverage(pred_sets_t, data, test_mask_t)
                 )
 
-        print("Coverage: ", np.mean(coverage_list))
+        avg_test_acc = np.mean(
+            results[method][GNN_model]["Assisted Semi-Ind"]["Accuracy"]["All"]
+        )
+        print(f"Test accuracy: {avg_test_acc:0.3f}")
+
 
 # %% [markdown]
 # ### Transductive experiments
 
 # %%
+dataset[0]
+
+# %%
+
 
 for method, GNN_model in product(methods, GNN_models):
 
@@ -726,9 +620,11 @@ for method, GNN_model in product(methods, GNN_models):
         if GNN_model == "GAT":
             model = GAT(data.num_nodes, num_channels_GAT, num_classes, seed=i)
 
-        optimizer = torch.optim.Adam(model.parameters())
+        optimizer = torch.optim.Adam(
+            model.parameters(), lr=learning_rate, weight_decay=weight_decay
+        )
 
-        print(f"Training {method_str} {GNN_model} Number {i}")
+        print(f"\nTraining {method_str} {GNN_model} Number {i}")
         max_valid_acc = 0
 
         for epoch in tqdm(range(num_epochs)):
@@ -739,28 +635,25 @@ for method, GNN_model in product(methods, GNN_models):
                 max_valid_acc = valid_acc
                 best_model = copy.deepcopy(model)
 
-        best_output = best_model(data.x, data.edge_index, data.edge_weight)
-        print(f"Best valid: {max_valid_acc:.4f}")
+        print(f"Validation accuracy: {max_valid_acc:0.3f}")
         print(f"Evaluating {method_str} {GNN_model} Number {i}")
+        output = best_model(data.x, data.edge_index)
 
-        coverage_list = []
         for j in tqdm(range(num_permute_trans)):
             # Permute the calibration and test datasets
             calib_mask, test_mask = mask_mix(calib_mask, test_mask, seed=j)
 
-            pred_sets = get_prediction_sets(
-                best_output, data, calib_mask, test_mask, alpha
-            )
+            pred_sets = get_prediction_sets(output, data, calib_mask, test_mask, alpha)
 
-            cov = coverage(pred_sets, data, test_mask)
-            coverage_list.append(cov)
             results[method][GNN_model]["Trans"]["Accuracy"]["All"].append(
-                accuracy(best_output, data, test_mask)
+                accuracy(output, data, test_mask)
             )
             results[method][GNN_model]["Trans"]["Avg Size"]["All"].append(
                 avg_set_size(pred_sets, test_mask)
             )
-            results[method][GNN_model]["Trans"]["Coverage"]["All"].append(cov)
+            results[method][GNN_model]["Trans"]["Coverage"]["All"].append(
+                coverage(pred_sets, data, test_mask)
+            )
 
             for t in range(T):
                 # Consider test nodes only at time t
@@ -778,14 +671,19 @@ for method, GNN_model in product(methods, GNN_models):
                     continue
 
                 # Get prediction sets corresponding to time t
-                index_mapping = {
-                    index: i for i, index in enumerate(np.where(test_mask)[0])
-                }
-                indices = [index_mapping[index] for index in np.where(test_mask_t)[0]]
-                pred_sets_t = pred_sets[np.array(indices)]
+                pred_sets_t = pred_sets[
+                    np.array(
+                        [
+                            np.where(
+                                np.where(test_mask)[0] == np.where(test_mask_t)[0][i]
+                            )[0][0]
+                            for i in range(sum(test_mask_t))
+                        ]
+                    )
+                ]
 
                 results[method][GNN_model]["Trans"]["Accuracy"][t].append(
-                    accuracy(best_output, data, test_mask_t)
+                    accuracy(output, data, test_mask_t)
                 )
                 results[method][GNN_model]["Trans"]["Avg Size"][t].append(
                     avg_set_size(pred_sets_t, test_mask_t)
@@ -794,13 +692,13 @@ for method, GNN_model in product(methods, GNN_models):
                     coverage(pred_sets_t, data, test_mask_t)
                 )
 
-        print("Coverage: ", np.mean(coverage_list))
+        avg_test_acc = np.mean(results[method][GNN_model]["Trans"]["Accuracy"]["All"])
+        print(f"Test accuracy: {avg_test_acc:0.3f}")
 
 # %% [markdown]
 # ### Semi-inductive experiments
 
 # %%
-# %%time
 
 for method, GNN_model in product(methods, GNN_models):
 
@@ -827,38 +725,38 @@ for method, GNN_model in product(methods, GNN_models):
         if GNN_model == "GAT":
             model = GAT(data.num_nodes, num_channels_GAT, num_classes, seed=i)
 
-        optimizer = torch.optim.Adam(model.parameters())
+        optimizer = torch.optim.Adam(
+            model.parameters(), lr=learning_rate, weight_decay=weight_decay
+        )
 
-        print(f"Training {method_str} {GNN_model} Number {i}")
+        print(f"\nTraining {method_str} {GNN_model} Number {i}")
         max_valid_acc = 0
 
-        val_curve = []
         for epoch in tqdm(range(num_epochs)):
             train_loss = train(model, data, train_mask)
             valid_acc = valid(model, data, valid_mask)
-            val_curve.append(valid_acc)
 
             if valid_acc > max_valid_acc:
                 max_valid_acc = valid_acc
                 best_model = copy.deepcopy(model)
 
-        best_output = best_model(data.x, data.edge_index, data.edge_weight)
-        print(f"Best valid: {max_valid_acc:.4f}")
         print(f"Evaluating {method_str} {GNN_model} Number {i}")
+        print(f"Validation accuracy: {max_valid_acc:0.3f}")
+        output = best_model(data.x, data.edge_index)
 
         # Cannot permute the calibration and test datasets in semi-inductive experiments
 
-        pred_sets = get_prediction_sets(best_output, data, calib_mask, test_mask, alpha)
+        pred_sets = get_prediction_sets(output, data, calib_mask, test_mask, alpha)
 
-        cov = coverage(pred_sets, data, test_mask)
-        print(f"Coverage: {cov:.4f}")
         results[method][GNN_model]["Semi-Ind"]["Accuracy"]["All"].append(
-            accuracy(best_output, data, test_mask)
+            accuracy(output, data, test_mask)
         )
         results[method][GNN_model]["Semi-Ind"]["Avg Size"]["All"].append(
             avg_set_size(pred_sets, test_mask)
         )
-        results[method][GNN_model]["Semi-Ind"]["Coverage"]["All"].append(cov)
+        results[method][GNN_model]["Semi-Ind"]["Coverage"]["All"].append(
+            coverage(pred_sets, data, test_mask)
+        )
 
         for t in range(T):
             # Consider test nodes only at time t
@@ -888,7 +786,7 @@ for method, GNN_model in product(methods, GNN_models):
             ]
 
             results[method][GNN_model]["Semi-Ind"]["Accuracy"][t].append(
-                accuracy(best_output, data, test_mask_t)
+                accuracy(output, data, test_mask_t)
             )
             results[method][GNN_model]["Semi-Ind"]["Avg Size"][t].append(
                 avg_set_size(pred_sets_t, test_mask_t)
@@ -897,12 +795,14 @@ for method, GNN_model in product(methods, GNN_models):
                 coverage(pred_sets_t, data, test_mask_t)
             )
 
+        avg_test_acc = np.mean(
+            results[method][GNN_model]["Semi-Ind"]["Accuracy"]["All"]
+        )
+        print(f"Test accuracy: {avg_test_acc:0.3f}")
+
 # %% [markdown]
 # Save results to pickle file.
 
 # %%
 with open(results_file, "wb") as file:
     pickle.dump(results, file)
-
-
-# %%
