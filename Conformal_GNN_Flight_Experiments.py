@@ -23,7 +23,11 @@ dataset_name = "Flight"
 
 
 # Training/validation/calibration/test dataset split sizes
-props = np.array([0.2, 0.1, 0.35, 0.35])
+# props = np.array([0.2, 0.1, 0.35, 0.35])
+props = np.array([0.5, 0.3, 0.1, 0.1])
+
+assert np.sum(props) == 1
+
 
 # Target 1-coverage for conformal prediction
 alpha = 0.1
@@ -48,7 +52,8 @@ num_channels_GAT = 32
 
 # Save results
 # results_file = f"results/Conformal_GNN_{dataset_name}_Results.pkl"
-results_file = f"results/{dataset_name}_with_assisted_semi_ind.pkl"
+# results_file = f"results/{dataset_name}_with_assisted_semi_ind.pkl"
+results_file = f"results/{dataset_name}_with_less_test.pkl"
 
 # %% [markdown]
 # ## Load dataset
@@ -472,13 +477,14 @@ def mask_split(mask, split_props, seed=0, mode="transductive"):
             np.cumsum(np.sum(mask, axis=0) / np.sum(mask)) >= 1 - split_props[-1]
         )[0][0]
 
-        flat_mask_idx = np.where(flat_mask)[0]
-        flat_mask_start_idx = flat_mask_idx[: n * T_trunc]
-        flat_mask_end_idx = flat_mask_idx[n * T_trunc :]
-
-        n_masks_start = len(flat_mask_start_idx)
+        # Flatten mask arrays into one dimension in blocks of nodes per time
+        flat_mask_start = mask[:, :T_trunc].T.reshape(-1)
+        flat_mask_end = mask[:, T_trunc:].T.reshape(-1)
+        n_masks_start = np.sum(flat_mask_start)
+        n_masks_end = np.sum(flat_mask_end)
 
         # Split starting shuffled flatten mask array into correct proportions
+        flat_mask_start_idx = np.where(flat_mask_start)[0]
         np.random.shuffle(flat_mask_start_idx)
         split_props_start = split_props[:-2] / np.sum(split_props[:-2])
         split_ns = np.cumsum(
@@ -486,25 +492,20 @@ def mask_split(mask, split_props, seed=0, mode="transductive"):
         )
         split_idx = np.split(flat_mask_start_idx, split_ns)
 
-        # # Place finishing flatten mask array at the end
-        # split_idx.append(flat_mask_end_idx)
-
         # Do the same for after T_trunc
-        n_masks_end = len(flat_mask_end_idx)
+        flat_mask_end_idx = np.where(flat_mask_end)[0]
         np.random.shuffle(flat_mask_end_idx)
         split_props_end = split_props[-2:] / np.sum(split_props[-2:])
         split_ns = np.cumsum(
             [round(n_masks_end * prop) for prop in split_props_end[:-1]]
         )
-        split_idx.append(np.split(flat_mask_end_idx, split_ns)[0])
-        split_idx.append(np.split(flat_mask_end_idx, split_ns)[1])
-
+        split_idx.append(n * T_trunc + np.split(flat_mask_end_idx, split_ns)[0])
+        split_idx.append(n * T_trunc + np.split(flat_mask_end_idx, split_ns)[1])
     split_masks = np.array([[False] * n * T for _ in range(len(split_props))])
     for i in range(len(split_props)):
         split_masks[i, split_idx[i]] = True
 
     return split_masks
-
 
 
 # %%
@@ -530,7 +531,6 @@ def mask_mix(mask_1, mask_2, seed=0):
 # Testing the training/validation/calibration/test data split functions.
 
 # %%
-props = np.array([0.2, 0.1, 0.35, 0.35])
 train_mask, valid_mask, calib_mask, test_mask = mask_split(
     data_mask, props, mode="semi-inductive"
 )

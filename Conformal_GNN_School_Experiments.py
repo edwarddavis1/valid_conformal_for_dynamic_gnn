@@ -1,3 +1,7 @@
+"""
+Bug with the assisted semi-inductive test mask being zero when test prop is low
+"""
+
 # %%
 import copy
 from itertools import product
@@ -12,14 +16,15 @@ from torch.functional import F
 
 import torch_geometric
 from torch_geometric.data import Data, Dataset
-from torch_geometric.nn import GATConv, GCNConv
+from torch_geometric.nn import GATConv, GCNConv, SAGEConv
 
 # %% [markdown]
 # ## Experiment parameters
 
 # %%
 # Training/validation/calibration/test dataset split sizes
-props = np.array([0.2, 0.1, 0.35, 0.35])
+# props = np.array([0.2, 0.1, 0.35, 0.35])
+props = np.array([0.5, 0.3, 0.1, 0.1])
 
 assert np.sum(props) == 1
 
@@ -41,12 +46,14 @@ num_train_semi_ind = 50
 num_epochs = 500
 num_channels_GCN = 16
 num_channels_GAT = 16
+num_channels_SAGE = 16
 learning_rate = 0.01
 weight_decay = 5e-4
 
 # Save results
 # results_file = 'results/Conformal_GNN_School_Results_10_100_50.pkl'
-results_file = "results/School_with_assisted_semi_ind.pkl"
+# results_file = "results/School_with_assisted_semi_ind.pkl"
+results_file = "results/School_with_less_test.pkl"
 # results_file = "results/school_with_5perc_training.pkl"
 
 # %% [markdown]
@@ -276,6 +283,22 @@ class GAT(torch.nn.Module):
         return x
 
 
+class GraphSAGE(torch.nn.Module):
+    def __init__(self, num_nodes, num_channels, num_classes, seed):
+        super().__init__()
+        torch.manual_seed(seed)
+        self.conv1 = SAGEConv(num_nodes, num_channels)
+        self.conv2 = SAGEConv(num_channels, num_classes)
+
+    def forward(self, x, edge_index):
+        x = self.conv1(x, edge_index)
+        x = x.relu()
+        x = F.dropout(x, p=0.5, training=self.training)
+        x = self.conv2(x, edge_index)
+
+        return x
+
+
 # %%
 def train(model, data, train_mask):
     model.train()
@@ -372,6 +395,7 @@ def mask_split(mask, split_props, seed=0, mode="transductive"):
         flat_mask_start = mask[:, :T_trunc].T.reshape(-1)
         flat_mask_end = mask[:, T_trunc:].T.reshape(-1)
         n_masks_start = np.sum(flat_mask_start)
+        n_masks_end = np.sum(flat_mask_end)
 
         # Split starting shuffled flatten mask array into correct proportions
         flat_mask_start_idx = np.where(flat_mask_start)[0]
@@ -387,7 +411,7 @@ def mask_split(mask, split_props, seed=0, mode="transductive"):
         np.random.shuffle(flat_mask_end_idx)
         split_props_end = split_props[-2:] / np.sum(split_props[-2:])
         split_ns = np.cumsum(
-            [round(n_masks_start * prop) for prop in split_props_end[:-1]]
+            [round(n_masks_end * prop) for prop in split_props_end[:-1]]
         )
         split_idx.append(n * T_trunc + np.split(flat_mask_end_idx, split_ns)[0])
         split_idx.append(n * T_trunc + np.split(flat_mask_end_idx, split_ns)[1])
@@ -395,6 +419,8 @@ def mask_split(mask, split_props, seed=0, mode="transductive"):
     split_masks = np.array([[False] * n * T for _ in range(len(split_props))])
     for i in range(len(split_props)):
         split_masks[i, split_idx[i]] = True
+
+    assert split_masks.sum() == data_mask.sum()
 
     return split_masks
 
@@ -422,7 +448,6 @@ def mask_mix(mask_1, mask_2, seed=0):
 # Testing the training/validation/calibration/test data split functions.
 
 # %%
-props = np.array([0.2, 0.1, 0.35, 0.35])
 train_mask, valid_mask, calib_mask, test_mask = mask_split(
     data_mask, props, mode="assisted semi-inductive"
 )
@@ -579,9 +604,11 @@ for method, GNN_model in product(methods, GNN_models):
             results[method][GNN_model]["Assisted Semi-Ind"]["Avg Size"]["All"].append(
                 avg_set_size(pred_sets, test_mask)
             )
+            coverage_value = coverage(pred_sets, data, test_mask)
             results[method][GNN_model]["Assisted Semi-Ind"]["Coverage"]["All"].append(
-                coverage(pred_sets, data, test_mask)
+                coverage_value
             )
+            print(f"Coverage: {coverage_value:0.3f}")
 
             for t in range(T):
                 # Consider test nodes only at time t
@@ -687,9 +714,11 @@ for method, GNN_model in product(methods, GNN_models):
             results[method][GNN_model]["Trans"]["Avg Size"]["All"].append(
                 avg_set_size(pred_sets, test_mask)
             )
+            coverage_value = coverage(pred_sets, data, test_mask)
             results[method][GNN_model]["Trans"]["Coverage"]["All"].append(
-                coverage(pred_sets, data, test_mask)
+                coverage_value
             )
+            print(f"Coverage: {coverage_value:0.3f}")
 
             for t in range(T):
                 # Consider test nodes only at time t
@@ -795,9 +824,9 @@ for method, GNN_model in product(methods, GNN_models):
         results[method][GNN_model]["Semi-Ind"]["Avg Size"]["All"].append(
             avg_set_size(pred_sets, test_mask)
         )
-        results[method][GNN_model]["Semi-Ind"]["Coverage"]["All"].append(
-            coverage(pred_sets, data, test_mask)
-        )
+        coverage_value = coverage(pred_sets, data, test_mask)
+        results[method][GNN_model]["Semi-Ind"]["Coverage"]["All"].append(coverage_value)
+        print(f"Coverage: {coverage_value:0.3f}")
 
         for t in range(T):
             # Consider test nodes only at time t

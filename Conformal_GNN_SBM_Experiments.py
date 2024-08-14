@@ -20,7 +20,11 @@ from torch_geometric.nn import GATConv, GCNConv
 
 # %%
 # Training/validation/calibration/test dataset split sizes
-props = np.array([0.2, 0.1, 0.35, 0.35])
+# props = np.array([0.2, 0.1, 0.35, 0.35])
+props = np.array([0.5, 0.3, 0.1, 0.1])
+
+assert np.sum(props) == 1
+
 
 # Target 1-coverage for conformal prediction
 alpha = 0.1
@@ -47,7 +51,7 @@ weight_decay = 5e-4
 # Save results
 # results_file = 'results/Conformal_GNN_SBM_Results_10_100_50.pkl'
 # results_file = 'results/Conformal_GNN_SBM_Results_10_100_50.pkl'
-results_file = f"results/SBM_with_assisted_semi_ind.pkl"
+results_file = f"results/SBM_with_less_test.pkl"
 
 # %% [markdown]
 # ## Generate dataset
@@ -332,6 +336,7 @@ def mask_split(mask, split_props, seed=0, mode="transductive"):
         flat_mask_start = mask[:, :T_trunc].T.reshape(-1)
         flat_mask_end = mask[:, T_trunc:].T.reshape(-1)
         n_masks_start = np.sum(flat_mask_start)
+        n_masks_end = np.sum(flat_mask_end)
 
         # Split starting shuffled flatten mask array into correct proportions
         flat_mask_start_idx = np.where(flat_mask_start)[0]
@@ -347,7 +352,7 @@ def mask_split(mask, split_props, seed=0, mode="transductive"):
         np.random.shuffle(flat_mask_end_idx)
         split_props_end = split_props[-2:] / np.sum(split_props[-2:])
         split_ns = np.cumsum(
-            [round(n_masks_start * prop) for prop in split_props_end[:-1]]
+            [round(n_masks_end * prop) for prop in split_props_end[:-1]]
         )
         split_idx.append(n * T_trunc + np.split(flat_mask_end_idx, split_ns)[0])
         split_idx.append(n * T_trunc + np.split(flat_mask_end_idx, split_ns)[1])
@@ -382,7 +387,6 @@ def mask_mix(mask_1, mask_2, seed=0):
 # Testing the training/validation/calibration/test data split functions.
 
 # %%
-props = np.array([0.2, 0.1, 0.35, 0.35])
 train_mask, valid_mask, calib_mask, test_mask = mask_split(
     data_mask, props, mode="semi-inductive"
 )
@@ -539,9 +543,11 @@ for method, GNN_model in product(methods, GNN_models):
             results[method][GNN_model]["Assisted Semi-Ind"]["Avg Size"]["All"].append(
                 avg_set_size(pred_sets, test_mask)
             )
+            coverage_value = coverage(pred_sets, data, test_mask)
             results[method][GNN_model]["Assisted Semi-Ind"]["Coverage"]["All"].append(
-                coverage(pred_sets, data, test_mask)
+                coverage_value
             )
+            print(f"Coverage: {coverage_value:0.3f}")
 
             for t in range(T):
                 # Consider test nodes only at time t
@@ -651,9 +657,11 @@ for method, GNN_model in product(methods, GNN_models):
             results[method][GNN_model]["Trans"]["Avg Size"]["All"].append(
                 avg_set_size(pred_sets, test_mask)
             )
+            coverage_value = coverage(pred_sets, data, test_mask)
             results[method][GNN_model]["Trans"]["Coverage"]["All"].append(
-                coverage(pred_sets, data, test_mask)
+                coverage_value
             )
+            print(f"Coverage: {coverage_value:0.3f}")
 
             for t in range(T):
                 # Consider test nodes only at time t
@@ -754,9 +762,9 @@ for method, GNN_model in product(methods, GNN_models):
         results[method][GNN_model]["Semi-Ind"]["Avg Size"]["All"].append(
             avg_set_size(pred_sets, test_mask)
         )
-        results[method][GNN_model]["Semi-Ind"]["Coverage"]["All"].append(
-            coverage(pred_sets, data, test_mask)
-        )
+        coverage_value = coverage(pred_sets, data, test_mask)
+        results[method][GNN_model]["Semi-Ind"]["Coverage"]["All"].append(coverage_value)
+        print(f"Coverage: {coverage_value:0.3f}")
 
         for t in range(T):
             # Consider test nodes only at time t
