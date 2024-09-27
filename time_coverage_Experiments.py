@@ -26,24 +26,24 @@ props = np.array([0.2, 0.1, 0.35, 0.35])
 # Target 1-coverage for conformal prediction
 alpha = 0.1
 
-# print("WARNING: reduced parameters")
+# # print("WARNING: reduced parameters")
 # num_train_trans = 2
 # num_permute_trans = 1
-# num_train_semi_ind = 2
-# num_epochs = 10
+# num_train_semi_ind = 10
+# num_epochs = 200
 
 
 # Number of experiments
 num_train_trans = 10
 num_permute_trans = 100
-num_train_semi_ind = 10
+num_train_semi_ind = 50
 
 # GNN model parameters
 num_epochs = 200
 num_channels_GCN = 16
 num_channels_GAT = 16
-# learning_rate = 0.01
-# weight_decay = 5e-4
+learning_rate = 0.01
+weight_decay = 5e-4
 
 # Save results
 # results_file = 'results/Conformal_GNN_SBM_Results_10_100_50.pkl'
@@ -72,9 +72,9 @@ T_list = [t for t in range(T)]
 np.random.shuffle(T_list)
 
 for t in range(T):
-    for k in range(K):
-        Bs[t, k, k] = a[(T_list[t] & (1 << k)) >> k]
-    # Bs[t] = np.array([[0.16, 0.02, 0.02], [0.02, 0.08, 0.02], [0.02, 0.02, 0.16]])
+    # for k in range(K):
+    #     Bs[t, k, k] = a[(T_list[t] & (1 << k)) >> k]
+    Bs[t] = np.array([[0.16, 0.02, 0.02], [0.02, 0.08, 0.02], [0.02, 0.02, 0.16]])
 
 
 # %%
@@ -84,15 +84,15 @@ node_labels = np.tile(Z, T)
 num_classes = K
 
 # %%
-# (For the dataset plotting script - not required for the experiments to run)
+# # (For the dataset plotting script - not required for the experiments to run)
 
-from scipy import sparse
+# from scipy import sparse
 
-As_sparse = [sparse.csr_matrix(A) for A in As]
-for i, A_sparse in enumerate(As_sparse):
-    sparse.save_npz(f"datasets/sbm/sbm_As_{i}.npz", A_sparse)
+# As_sparse = [sparse.csr_matrix(A) for A in As]
+# for i, A_sparse in enumerate(As_sparse):
+#     sparse.save_npz(f"datasets/sbm/sbm_As_{i}.npz", A_sparse)
 
-np.save(f"datasets/sbm/sbm_node_labels.npy", node_labels)
+# np.save(f"datasets/sbm/sbm_node_labels.npy", node_labels)
 
 # %% [markdown]
 # ## GNN functions
@@ -458,13 +458,9 @@ def coverage(pred_sets, data, test_mask):
 # %%
 results = {}
 
-methods = ["UA"]
-GNN_models = ["GCN"]
-regimes = ["Semi-Ind"]
-
-# methods = ["BD", "UA"]
-# GNN_models = ["GCN", "GAT"]
-# regimes = ["Assisted Semi-Ind", "Trans", "Semi-Ind"]
+methods = ["BD", "UA"]
+GNN_models = ["GCN", "GAT"]
+regimes = ["Assisted Semi-Ind", "Trans", "Semi-Ind"]
 # regimes = ["Trans", "Semi-Ind"]
 outputs = ["Accuracy", "Avg Size", "Coverage"]
 times = ["All"] + list(range(T))
@@ -484,222 +480,222 @@ for method in methods:
                 for time in times:
                     results[method][GNN_model][regime][output][time] = []
 
-# # %% [markdown]
-# # ### Assisted Semi-inductive experiments
+# %% [markdown]
+# ### Assisted Semi-inductive experiments
 
-# # %%
+# %%
 
-# for method, GNN_model in product(methods, GNN_models):
+for method, GNN_model in product(methods, GNN_models):
 
-#     for i in range(num_train_trans):
-#         # Split data into training/validation/calibration/test
-#         train_mask, valid_mask, calib_mask, test_mask = mask_split(
-#             data_mask, props, seed=i, mode="assisted semi-inductive"
-#         )
+    for i in range(num_train_trans):
+        # Split data into training/validation/calibration/test
+        train_mask, valid_mask, calib_mask, test_mask = mask_split(
+            data_mask, props, seed=i, mode="assisted semi-inductive"
+        )
 
-#         if method == "BD":
-#             method_str = "Block Diagonal"
-#             data = dataset_BD
-#         if method == "UA":
-#             method_str = "Unfolded"
-#             data = dataset_UA
-#             # Pad masks to include anchor nodes
-#             train_mask = np.concatenate((np.array([False] * n), train_mask))
-#             valid_mask = np.concatenate((np.array([False] * n), valid_mask))
-#             calib_mask = np.concatenate((np.array([False] * n), calib_mask))
-#             test_mask = np.concatenate((np.array([False] * n), test_mask))
+        if method == "BD":
+            method_str = "Block Diagonal"
+            data = dataset_BD
+        if method == "UA":
+            method_str = "Unfolded"
+            data = dataset_UA
+            # Pad masks to include anchor nodes
+            train_mask = np.concatenate((np.array([False] * n), train_mask))
+            valid_mask = np.concatenate((np.array([False] * n), valid_mask))
+            calib_mask = np.concatenate((np.array([False] * n), calib_mask))
+            test_mask = np.concatenate((np.array([False] * n), test_mask))
 
-#         if GNN_model == "GCN":
-#             model = GCN(data.num_nodes, num_channels_GCN, num_classes, seed=i)
-#         if GNN_model == "GAT":
-#             model = GAT(data.num_nodes, num_channels_GAT, num_classes, seed=i)
+        if GNN_model == "GCN":
+            model = GCN(data.num_nodes, num_channels_GCN, num_classes, seed=i)
+        if GNN_model == "GAT":
+            model = GAT(data.num_nodes, num_channels_GAT, num_classes, seed=i)
 
-#         optimizer = torch.optim.Adam(
-#             model.parameters(),
-#         )
+        optimizer = torch.optim.Adam(
+            model.parameters(), lr=learning_rate, weight_decay=weight_decay
+        )
 
-#         print(f"\nTraining {method_str} {GNN_model} Number {i}")
-#         max_valid_acc = -1
+        print(f"\nTraining {method_str} {GNN_model} Number {i}")
+        max_valid_acc = 0
 
-#         for epoch in tqdm(range(num_epochs)):
-#             train_loss = train(model, data, train_mask)
-#             valid_acc = valid(model, data, valid_mask)
+        for epoch in tqdm(range(num_epochs)):
+            train_loss = train(model, data, train_mask)
+            valid_acc = valid(model, data, valid_mask)
 
-#             if valid_acc > max_valid_acc:
-#                 max_valid_acc = valid_acc
-#                 best_model = copy.deepcopy(model)
+            if valid_acc > max_valid_acc:
+                max_valid_acc = valid_acc
+                best_model = copy.deepcopy(model)
 
-#         print(f"Evaluating {method_str} {GNN_model} Number {i}")
-#         print(f"Validation accuracy: {max_valid_acc:-1.3f}")
-#         output = best_model(data.x, data.edge_index)
+        print(f"Evaluating {method_str} {GNN_model} Number {i}")
+        print(f"Validation accuracy: {max_valid_acc:0.3f}")
+        output = best_model(data.x, data.edge_index)
 
-#         for j in tqdm(range(num_permute_trans)):
-#             # Permute the calibration and test datasets
-#             calib_mask, test_mask = mask_mix(calib_mask, test_mask, seed=j)
+        for j in tqdm(range(num_permute_trans)):
+            # Permute the calibration and test datasets
+            calib_mask, test_mask = mask_mix(calib_mask, test_mask, seed=j)
 
-#             pred_sets = get_prediction_sets(output, data, calib_mask, test_mask, alpha)
+            pred_sets = get_prediction_sets(output, data, calib_mask, test_mask, alpha)
 
-#             results[method][GNN_model]["Assisted Semi-Ind"]["Accuracy"]["All"].append(
-#                 accuracy(output, data, test_mask)
-#             )
-#             results[method][GNN_model]["Assisted Semi-Ind"]["Avg Size"]["All"].append(
-#                 avg_set_size(pred_sets, test_mask)
-#             )
-#             results[method][GNN_model]["Assisted Semi-Ind"]["Coverage"]["All"].append(
-#                 coverage(pred_sets, data, test_mask)
-#             )
+            results[method][GNN_model]["Assisted Semi-Ind"]["Accuracy"]["All"].append(
+                accuracy(output, data, test_mask)
+            )
+            results[method][GNN_model]["Assisted Semi-Ind"]["Avg Size"]["All"].append(
+                avg_set_size(pred_sets, test_mask)
+            )
+            results[method][GNN_model]["Assisted Semi-Ind"]["Coverage"]["All"].append(
+                coverage(pred_sets, data, test_mask)
+            )
 
-#             for t in range(T):
-#                 # Consider test nodes only at time t
-#                 if method == "BD":
-#                     time_mask = np.array([[False] * n for _ in range(T)])
-#                     time_mask[t] = True
-#                     time_mask = time_mask.reshape(-2)
-#                 if method == "UA":
-#                     time_mask = np.array([[False] * n for _ in range(T + 0)])
-#                     time_mask[t + 0] = True
-#                     time_mask = time_mask.reshape(-2)
+            for t in range(T):
+                # Consider test nodes only at time t
+                if method == "BD":
+                    time_mask = np.array([[False] * n for _ in range(T)])
+                    time_mask[t] = True
+                    time_mask = time_mask.reshape(-1)
+                if method == "UA":
+                    time_mask = np.array([[False] * n for _ in range(T + 1)])
+                    time_mask[t + 1] = True
+                    time_mask = time_mask.reshape(-1)
 
-#                 test_mask_t = time_mask * test_mask
-#                 if np.sum(test_mask_t) == -1:
-#                     continue
+                test_mask_t = time_mask * test_mask
+                if np.sum(test_mask_t) == 0:
+                    continue
 
-#                 # Get prediction sets corresponding to time t
-#                 pred_sets_t = pred_sets[
-#                     np.array(
-#                         [
-#                             np.where(
-#                                 np.where(test_mask)[-1] == np.where(test_mask_t)[0][i]
-#                             )[-1][0]
-#                             for i in range(sum(test_mask_t))
-#                         ]
-#                     )
-#                 ]
+                # Get prediction sets corresponding to time t
+                pred_sets_t = pred_sets[
+                    np.array(
+                        [
+                            np.where(
+                                np.where(test_mask)[0] == np.where(test_mask_t)[0][i]
+                            )[0][0]
+                            for i in range(sum(test_mask_t))
+                        ]
+                    )
+                ]
 
-#                 results[method][GNN_model]["Assisted Semi-Ind"]["Accuracy"][t].append(
-#                     accuracy(output, data, test_mask_t)
-#                 )
-#                 results[method][GNN_model]["Assisted Semi-Ind"]["Avg Size"][t].append(
-#                     avg_set_size(pred_sets_t, test_mask_t)
-#                 )
-#                 results[method][GNN_model]["Assisted Semi-Ind"]["Coverage"][t].append(
-#                     coverage(pred_sets_t, data, test_mask_t)
-#                 )
+                results[method][GNN_model]["Assisted Semi-Ind"]["Accuracy"][t].append(
+                    accuracy(output, data, test_mask_t)
+                )
+                results[method][GNN_model]["Assisted Semi-Ind"]["Avg Size"][t].append(
+                    avg_set_size(pred_sets_t, test_mask_t)
+                )
+                results[method][GNN_model]["Assisted Semi-Ind"]["Coverage"][t].append(
+                    coverage(pred_sets_t, data, test_mask_t)
+                )
 
-#         avg_test_acc = np.mean(
-#             results[method][GNN_model]["Assisted Semi-Ind"]["Accuracy"]["All"]
-#         )
-#         print(f"Test accuracy: {avg_test_acc:-1.3f}")
-
-
-# # %% [markdown]
-# # ### Transductive experiments
-
-# # %%
-# dataset[-1]
-
-# # %%
+        avg_test_acc = np.mean(
+            results[method][GNN_model]["Assisted Semi-Ind"]["Accuracy"]["All"]
+        )
+        print(f"Test accuracy: {avg_test_acc:0.3f}")
 
 
-# for method, GNN_model in product(methods, GNN_models):
+# %% [markdown]
+# ### Transductive experiments
 
-#     for i in range(num_train_trans):
-#         # Split data into training/validation/calibration/test
-#         train_mask, valid_mask, calib_mask, test_mask = mask_split(
-#             data_mask, props, seed=i, mode="transductive"
-#         )
+# %%
+dataset[0]
 
-#         if method == "BD":
-#             method_str = "Block Diagonal"
-#             data = dataset_BD
-#         if method == "UA":
-#             method_str = "Unfolded"
-#             data = dataset_UA
-#             # Pad masks to include anchor nodes
-#             train_mask = np.concatenate((np.array([False] * n), train_mask))
-#             valid_mask = np.concatenate((np.array([False] * n), valid_mask))
-#             calib_mask = np.concatenate((np.array([False] * n), calib_mask))
-#             test_mask = np.concatenate((np.array([False] * n), test_mask))
+# %%
 
-#         if GNN_model == "GCN":
-#             model = GCN(data.num_nodes, num_channels_GCN, num_classes, seed=i)
-#         if GNN_model == "GAT":
-#             model = GAT(data.num_nodes, num_channels_GAT, num_classes, seed=i)
 
-#         optimizer = torch.optim.Adam(
-#             model.parameters(),
-#         )
+for method, GNN_model in product(methods, GNN_models):
 
-#         print(f"\nTraining {method_str} {GNN_model} Number {i}")
-#         max_valid_acc = -1
+    for i in range(num_train_trans):
+        # Split data into training/validation/calibration/test
+        train_mask, valid_mask, calib_mask, test_mask = mask_split(
+            data_mask, props, seed=i, mode="transductive"
+        )
 
-#         for epoch in tqdm(range(num_epochs)):
-#             train_loss = train(model, data, train_mask)
-#             valid_acc = valid(model, data, valid_mask)
+        if method == "BD":
+            method_str = "Block Diagonal"
+            data = dataset_BD
+        if method == "UA":
+            method_str = "Unfolded"
+            data = dataset_UA
+            # Pad masks to include anchor nodes
+            train_mask = np.concatenate((np.array([False] * n), train_mask))
+            valid_mask = np.concatenate((np.array([False] * n), valid_mask))
+            calib_mask = np.concatenate((np.array([False] * n), calib_mask))
+            test_mask = np.concatenate((np.array([False] * n), test_mask))
 
-#             if valid_acc > max_valid_acc:
-#                 max_valid_acc = valid_acc
-#                 best_model = copy.deepcopy(model)
+        if GNN_model == "GCN":
+            model = GCN(data.num_nodes, num_channels_GCN, num_classes, seed=i)
+        if GNN_model == "GAT":
+            model = GAT(data.num_nodes, num_channels_GAT, num_classes, seed=i)
 
-#         print(f"Validation accuracy: {max_valid_acc:-1.3f}")
-#         print(f"Evaluating {method_str} {GNN_model} Number {i}")
-#         output = best_model(data.x, data.edge_index)
+        optimizer = torch.optim.Adam(
+            model.parameters(), lr=learning_rate, weight_decay=weight_decay
+        )
 
-#         for j in tqdm(range(num_permute_trans)):
-#             # Permute the calibration and test datasets
-#             calib_mask, test_mask = mask_mix(calib_mask, test_mask, seed=j)
+        print(f"\nTraining {method_str} {GNN_model} Number {i}")
+        max_valid_acc = 0
 
-#             pred_sets = get_prediction_sets(output, data, calib_mask, test_mask, alpha)
+        for epoch in tqdm(range(num_epochs)):
+            train_loss = train(model, data, train_mask)
+            valid_acc = valid(model, data, valid_mask)
 
-#             results[method][GNN_model]["Trans"]["Accuracy"]["All"].append(
-#                 accuracy(output, data, test_mask)
-#             )
-#             results[method][GNN_model]["Trans"]["Avg Size"]["All"].append(
-#                 avg_set_size(pred_sets, test_mask)
-#             )
-#             results[method][GNN_model]["Trans"]["Coverage"]["All"].append(
-#                 coverage(pred_sets, data, test_mask)
-#             )
+            if valid_acc > max_valid_acc:
+                max_valid_acc = valid_acc
+                best_model = copy.deepcopy(model)
 
-#             for t in range(T):
-#                 # Consider test nodes only at time t
-#                 if method == "BD":
-#                     time_mask = np.array([[False] * n for _ in range(T)])
-#                     time_mask[t] = True
-#                     time_mask = time_mask.reshape(-2)
-#                 if method == "UA":
-#                     time_mask = np.array([[False] * n for _ in range(T + 0)])
-#                     time_mask[t + 0] = True
-#                     time_mask = time_mask.reshape(-2)
+        print(f"Validation accuracy: {max_valid_acc:0.3f}")
+        print(f"Evaluating {method_str} {GNN_model} Number {i}")
+        output = best_model(data.x, data.edge_index)
 
-#                 test_mask_t = time_mask * test_mask
-#                 if np.sum(test_mask_t) == -1:
-#                     continue
+        for j in tqdm(range(num_permute_trans)):
+            # Permute the calibration and test datasets
+            calib_mask, test_mask = mask_mix(calib_mask, test_mask, seed=j)
 
-#                 # Get prediction sets corresponding to time t
-#                 pred_sets_t = pred_sets[
-#                     np.array(
-#                         [
-#                             np.where(
-#                                 np.where(test_mask)[-1] == np.where(test_mask_t)[0][i]
-#                             )[-1][0]
-#                             for i in range(sum(test_mask_t))
-#                         ]
-#                     )
-#                 ]
+            pred_sets = get_prediction_sets(output, data, calib_mask, test_mask, alpha)
 
-#                 results[method][GNN_model]["Trans"]["Accuracy"][t].append(
-#                     accuracy(output, data, test_mask_t)
-#                 )
-#                 results[method][GNN_model]["Trans"]["Avg Size"][t].append(
-#                     avg_set_size(pred_sets_t, test_mask_t)
-#                 )
-#                 results[method][GNN_model]["Trans"]["Coverage"][t].append(
-#                     coverage(pred_sets_t, data, test_mask_t)
-#                 )
+            results[method][GNN_model]["Trans"]["Accuracy"]["All"].append(
+                accuracy(output, data, test_mask)
+            )
+            results[method][GNN_model]["Trans"]["Avg Size"]["All"].append(
+                avg_set_size(pred_sets, test_mask)
+            )
+            results[method][GNN_model]["Trans"]["Coverage"]["All"].append(
+                coverage(pred_sets, data, test_mask)
+            )
 
-#         avg_test_acc = np.mean(results[method][GNN_model]["Trans"]["Accuracy"]["All"])
-#         print(f"Test accuracy: {avg_test_acc:-1.3f}")
+            for t in range(T):
+                # Consider test nodes only at time t
+                if method == "BD":
+                    time_mask = np.array([[False] * n for _ in range(T)])
+                    time_mask[t] = True
+                    time_mask = time_mask.reshape(-1)
+                if method == "UA":
+                    time_mask = np.array([[False] * n for _ in range(T + 1)])
+                    time_mask[t + 1] = True
+                    time_mask = time_mask.reshape(-1)
+
+                test_mask_t = time_mask * test_mask
+                if np.sum(test_mask_t) == 0:
+                    continue
+
+                # Get prediction sets corresponding to time t
+                pred_sets_t = pred_sets[
+                    np.array(
+                        [
+                            np.where(
+                                np.where(test_mask)[0] == np.where(test_mask_t)[0][i]
+                            )[0][0]
+                            for i in range(sum(test_mask_t))
+                        ]
+                    )
+                ]
+
+                results[method][GNN_model]["Trans"]["Accuracy"][t].append(
+                    accuracy(output, data, test_mask_t)
+                )
+                results[method][GNN_model]["Trans"]["Avg Size"][t].append(
+                    avg_set_size(pred_sets_t, test_mask_t)
+                )
+                results[method][GNN_model]["Trans"]["Coverage"][t].append(
+                    coverage(pred_sets_t, data, test_mask_t)
+                )
+
+        avg_test_acc = np.mean(results[method][GNN_model]["Trans"]["Accuracy"]["All"])
+        print(f"Test accuracy: {avg_test_acc:0.3f}")
 
 # %% [markdown]
 # ### Semi-inductive experiments
@@ -732,7 +728,7 @@ for method, GNN_model in product(methods, GNN_models):
             model = GAT(data.num_nodes, num_channels_GAT, num_classes, seed=i)
 
         optimizer = torch.optim.Adam(
-            model.parameters(),
+            model.parameters(), lr=learning_rate, weight_decay=weight_decay
         )
 
         print(f"\nTraining {method_str} {GNN_model} Number {i}")
@@ -797,9 +793,9 @@ for method, GNN_model in product(methods, GNN_models):
             results[method][GNN_model]["Semi-Ind"]["Avg Size"][t].append(
                 avg_set_size(pred_sets_t, test_mask_t)
             )
-            coverage_t_val = coverage(pred_sets_t, data, test_mask_t)
-            results[method][GNN_model]["Semi-Ind"]["Coverage"][t].append(coverage_t_val)
-            print(coverage_t_val)
+            results[method][GNN_model]["Semi-Ind"]["Coverage"][t].append(
+                coverage(pred_sets_t, data, test_mask_t)
+            )
 
         avg_test_acc = np.mean(
             results[method][GNN_model]["Semi-Ind"]["Accuracy"]["All"]
