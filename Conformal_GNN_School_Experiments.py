@@ -422,7 +422,6 @@ def mask_mix(mask_1, mask_2, seed=0):
 # Testing the training/validation/calibration/test data split functions.
 
 # %%
-props = np.array([0.2, 0.1, 0.35, 0.35])
 train_mask, valid_mask, calib_mask, test_mask = mask_split(
     data_mask, props, mode="assisted semi-inductive"
 )
