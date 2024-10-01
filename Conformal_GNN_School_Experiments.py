@@ -1,7 +1,3 @@
-"""
-Bug with the assisted semi-inductive test mask being zero when test prop is low
-"""
-
 # %%
 import copy
 from itertools import product

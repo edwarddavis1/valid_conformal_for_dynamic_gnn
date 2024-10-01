@@ -444,14 +444,14 @@ def mask_split(mask, split_props, seed=0, mode="transductive"):
             np.cumsum(np.sum(mask, axis=0) / np.sum(mask)) >= 1 - split_props[-1]
         )[0][0]
 
-        # Flatten mask arrays into one dimension in blocks of nodes per time
-        flat_mask_start = mask[:, :T_trunc].T.reshape(-1)
-        flat_mask_end = mask[:, T_trunc:].T.reshape(-1)
-        n_masks_start = np.sum(flat_mask_start)
-        n_masks_end = np.sum(flat_mask_end)
+        flat_mask_idx = np.where(flat_mask)[0]
+        flat_mask_start_idx = flat_mask_idx[: n * T_trunc]
+        flat_mask_end_idx = flat_mask_idx[n * T_trunc :]
+
+        n_masks_start = len(flat_mask_start_idx)
+        n_masks_end = len(flat_mask_end_idx)
 
         # Split starting shuffled flatten mask array into correct proportions
-        flat_mask_start_idx = np.where(flat_mask_start)[0]
         np.random.shuffle(flat_mask_start_idx)
         split_props_start = split_props[:-2] / np.sum(split_props[:-2])
         split_ns = np.cumsum(
@@ -459,8 +459,7 @@ def mask_split(mask, split_props, seed=0, mode="transductive"):
         )
         split_idx = np.split(flat_mask_start_idx, split_ns)
 
-        # Do the same for after T_trunc
-        flat_mask_end_idx = np.where(flat_mask_end)[0]
+        # Do the same after T_trunc
         np.random.shuffle(flat_mask_end_idx)
         split_props_end = split_props[-2:] / np.sum(split_props[-2:])
         split_ns = np.cumsum(
