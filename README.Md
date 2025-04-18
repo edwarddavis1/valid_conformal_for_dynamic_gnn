@@ -2,6 +2,8 @@
 
 This repository contains code for the paper: [Valid Conformal Prediction for Dynamic GNNs](https://arxiv.org/abs/2405.19230)
 
+For a more stable implementation of the unfolded GNN, see the [UGNN](https://github.com/edwarddavis1/UGNN) repo.
+
 ## Getting Started
 
 This code was produced using Python 3.10.2. Dependencies for this repository can be installed using 
